@@ -3,8 +3,7 @@ name: AI Job Agent
 on:
   schedule:
     # Times are UTC. IST = UTC + 5:30  ->  8:15, 12:15, 16:15, 20:15 IST
-    - cron: "45 2 * * *"        # morning run also searches JSearch (LinkedIn/Indeed/Naukri via Google for Jobs)
-    - cron: "45 6,10,14 * * *"
+    - cron: "30 12 * * *"       # 6:00 PM IST
   workflow_dispatch:            # "Run workflow" button in the Actions tab
 
 permissions:
