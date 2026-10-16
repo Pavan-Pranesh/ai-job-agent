@@ -38,6 +38,11 @@ COUNTRY = "in"                      # India
 # Nothing else is checked (no experience, salary, title or AI-score filter).
 KEYWORDS = ["pyspark", "databricks", "adf", "azure data factory", "adls", "python", "synapse"]
 
+# Only jobs in these places are kept (location text is matched, any case). Remote / work-from-home is also kept.
+LOCATIONS = ["bangalore", "bengaluru", "coimbatore"]
+ALLOW_REMOTE = True
+KEEP_UNKNOWN_LOCATION = False       # True = also keep jobs whose location isn't stated (e.g. some alert emails)
+
 MAX_WHATSAPP = 8                    # only used if WhatsApp/Telegram secrets are added
 EXP_MIN, EXP_MAX, MIN_SALARY_LPA = 5, 10, 18   # shown in the email text only, not used as filters
 
@@ -47,8 +52,8 @@ Python, SQL, T-SQL, SQL Server, Delta Lake, Medallion architecture, incremental 
 Azure DevOps CI/CD, Key Vault, Unity Catalog, Power BI.
 Wants: Data Engineer / Senior Data Engineer / Azure Data Engineer roles in India, 5-10 years, 18 LPA+."""
 # The AI score is only used to SORT jobs (best first). It never removes a job.
-LINKEDIN_PAGES = 2                 # 25 jobs per page, posted in the last 24 hours (stops early when results run out)
-NAUKRI_PAGES = 2                  # 20 jobs per page, posted in the last day (stops early when results run out)
+LINKEDIN_PAGES = 20                 # 25 jobs per page, posted in the last 24 hours (stops early when results run out)
+NAUKRI_PAGES = 20                   # 20 jobs per page, posted in the last day (stops early when results run out)
 JSEARCH_TERMS = 4                   # JSearch free quota is small: only the first N search terms, morning run only
 JOOBLE_PAGES = 3                    # pages of Jooble results per search (about 20 jobs per page)
 AI_BATCH = 20                       # jobs per AI request (fewer, bigger requests = faster)
@@ -122,6 +127,28 @@ def rule_filter(j):
     return bool(KW_RE.search(f"{j.get('title', '')} {j.get('desc', '')}"))
 
 
+REMOTE_RE = re.compile(r"\bremote\b|work from home|work-from-home|\bwfh\b|anywhere in india|fully remote", re.I)
+LOC_RE = re.compile("|".join(re.escape(l) for l in LOCATIONS), re.I)
+
+
+def location_ok(j):
+    """Keep only Bangalore / Coimbatore / remote jobs."""
+    loc = j.get("location") or ""
+    if j.get("remote") and ALLOW_REMOTE:
+        return True
+    if LOC_RE.search(loc) or (ALLOW_REMOTE and REMOTE_RE.search(loc)):
+        return True
+    if ALLOW_REMOTE and REMOTE_RE.search(j.get("title", "")):
+        return True
+    if not loc.strip() or loc.strip().lower() == "india":
+        # location not stated: look in the details, else follow KEEP_UNKNOWN_LOCATION
+        text = f"{j.get('title', '')} {j.get('desc', '')[:400]}"
+        if LOC_RE.search(text) or (ALLOW_REMOTE and REMOTE_RE.search(text)):
+            return True
+        return KEEP_UNKNOWN_LOCATION
+    return False
+
+
 def enrich(j):
     text = f"{j.get('exp_text', '')} {j['title']} {j.get('desc', '')} {j.get('salary_text', '')}"
     if j.get("exp_min") is None:
@@ -161,14 +188,17 @@ def fetch_jooble(query):
     if not key:
         return []
     raw = []
-    for page in range(1, JOOBLE_PAGES + 1):
-        r = requests.post(f"https://jooble.org/api/{key}", timeout=HTTP_TIMEOUT,
-                          json={"keywords": query, "location": "India", "page": str(page)})
-        r.raise_for_status()
-        jobs = r.json().get("jobs", []) or []
-        raw += jobs
-        if len(jobs) < 10:
-            break
+    for place in ["Bangalore", "Coimbatore", "Remote"]:
+        for page in range(1, JOOBLE_PAGES + 1):
+            r = requests.post(f"https://jooble.org/api/{key}", timeout=HTTP_TIMEOUT,
+                              json={"keywords": query, "location": place, "page": str(page)})
+            r.raise_for_status()
+            jobs = r.json().get("jobs", []) or []
+            for x in jobs:
+                x["_remote"] = place == "Remote"
+            raw += jobs
+            if len(jobs) < 10:
+                break
     out = []
     for x in raw:
         out.append({
@@ -178,6 +208,7 @@ def fetch_jooble(query):
             "posted": x.get("updated", ""),
             "desc": clean(BeautifulSoup(x.get("snippet", ""), "html.parser").get_text()),
             "salary_text": clean(x.get("salary")), "search_kw": query,
+            "remote": bool(x.get("_remote")) and bool(REMOTE_RE.search(f"{x.get('location', '')} {x.get('title', '')} {x.get('snippet', '')} {x.get('type', '')}")),
         })
     return out
 
@@ -245,35 +276,41 @@ def _pause(a=1.5, b=3):
     time.sleep(random.uniform(a, b))
 
 
+LINKEDIN_SEARCHES = [("Bengaluru, Karnataka, India", {}), ("Coimbatore, Tamil Nadu, India", {}),
+                     ("India", {"f_WT": "2"})]      # f_WT=2 means Remote on LinkedIn
+
+
 def fetch_linkedin(term):
-    """LinkedIn public (no login) job search, India, posted in the last 24 hours."""
+    """LinkedIn public (no login) job search, posted in the last 24 hours: Bengaluru, Coimbatore and Remote (India)."""
     out = []
-    for start in range(0, LINKEDIN_PAGES * 25, 25):
-        r = http().get("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search", timeout=HTTP_TIMEOUT,
-                         headers=BROWSER, params={"keywords": term, "location": "India", "f_TPR": "r86400",
-                                                  "start": start})
-        if r.status_code == 429:
-            print(f"  LinkedIn is rate-limiting (429) after {len(out)} jobs for '{term}'")
-            break
-        r.raise_for_status()
-        cards = BeautifulSoup(r.text, "html.parser").select("li")
-        got = 0
-        for c in cards:
-            t = c.select_one("h3.base-search-card__title")
-            link = c.select_one("a.base-card__full-link") or c.select_one("a[href*='/jobs/view/']")
-            if not t or not link:
-                continue
-            comp = c.select_one("h4.base-search-card__subtitle")
-            loc = c.select_one("span.job-search-card__location")
-            when = c.select_one("time")
-            out.append({"title": clean(t.get_text()), "company": clean(comp.get_text()) if comp else "",
-                        "location": clean(loc.get_text()) if loc else "India",
-                        "url": link["href"].split("?")[0], "source": "LinkedIn",
-                        "posted": when.get("datetime", "") if when else "", "desc": "", "search_kw": term})
-            got += 1
-        if got < 10:
-            break
-        _pause()
+    for place, extra in LINKEDIN_SEARCHES:
+        remote = extra.get("f_WT") == "2"
+        for start in range(0, LINKEDIN_PAGES * 25, 25):
+            r = http().get("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search", timeout=HTTP_TIMEOUT,
+                           headers=BROWSER, params=dict({"keywords": term, "location": place, "f_TPR": "r86400",
+                                                         "start": start}, **extra))
+            if r.status_code == 429:
+                print(f"  LinkedIn is rate-limiting (429) after {len(out)} jobs for '{term}'")
+                return out
+            r.raise_for_status()
+            got = 0
+            for c in BeautifulSoup(r.text, "html.parser").select("li"):
+                t = c.select_one("h3.base-search-card__title")
+                link = c.select_one("a.base-card__full-link") or c.select_one("a[href*='/jobs/view/']")
+                if not t or not link:
+                    continue
+                comp = c.select_one("h4.base-search-card__subtitle")
+                loc = c.select_one("span.job-search-card__location")
+                when = c.select_one("time")
+                loc_txt = clean(loc.get_text()) if loc else place
+                out.append({"title": clean(t.get_text()), "company": clean(comp.get_text()) if comp else "",
+                            "location": (loc_txt + " (Remote)") if remote else loc_txt, "remote": remote,
+                            "url": link["href"].split("?")[0], "source": "LinkedIn",
+                            "posted": when.get("datetime", "") if when else "", "desc": "", "search_kw": term})
+                got += 1
+            if got < 10:
+                break
+            _pause()
     return out
 
 
@@ -564,7 +601,7 @@ def send_email(jobs):
     dash = env("DASHBOARD_URL")
     body = f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:680px;margin:auto">
 <h2 style="color:#2E3A4F;margin-bottom:4px">{len(jobs)} new Azure Data Engineer jobs</h2>
-<div style="color:#6b7280;font-size:13px;margin-bottom:12px">Jobs mentioning any of: {", ".join(KEYWORDS)}. Sorted by AI match score.</div>
+<div style="color:#6b7280;font-size:13px;margin-bottom:12px">Jobs mentioning any of: {", ".join(KEYWORDS)} &middot; Bangalore, Coimbatore or Remote. Sorted by AI match score.</div>
 {f'<div style="font-size:13px;margin-bottom:10px">Showing the top {EMAIL_MAX_ROWS} by match score. <b>All {len(jobs)} jobs are in the attached CSV</b> (opens in Excel / Google Sheets).</div>' if len(jobs) > EMAIL_MAX_ROWS else ''}
 <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px">{''.join(rows)}</table>
 {f'<p style="font-size:13px"><a href="{dash}">Open your job dashboard</a></p>' if dash else ''}
@@ -695,7 +732,7 @@ def main():
     print(f"Fetched {len(found)} jobs")
 
     candidates, ids = [], set()
-    dup, old, nokw = 0, 0, 0
+    dup, old, nokw, noloc = 0, 0, 0, 0
     for j in found:
         if not j.get("title") or not j.get("url"):
             continue
@@ -707,12 +744,14 @@ def main():
         if j["id"] in seen:
             old += 1
             continue
-        if rule_filter(enrich(j)):
-            candidates.append(j)
-        else:
+        if not rule_filter(enrich(j)):
             nokw += 1
+        elif not location_ok(j):
+            noloc += 1
+        else:
+            candidates.append(j)
     print(f"Breakdown: {len(found)} fetched -> {dup} duplicates across searches, {old} already sent earlier, "
-          f"{nokw} without any keyword -> {len(candidates)} new matches")
+          f"{nokw} without any keyword, {noloc} outside Bangalore/Coimbatore/Remote -> {len(candidates)} new matches")
     print(f"New after filters: {len(candidates)}")
 
     scored = ai_score(candidates)          # score is used for sorting only
