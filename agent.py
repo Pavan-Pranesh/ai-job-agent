@@ -46,6 +46,8 @@ Python, SQL, T-SQL, SQL Server, Delta Lake, Medallion architecture, incremental 
 Azure DevOps CI/CD, Key Vault, Unity Catalog, Power BI.
 Wants: Data Engineer / Senior Data Engineer / Azure Data Engineer roles in India, 5-10 years, 18 LPA+."""
 # The AI score is only used to SORT jobs (best first). It never removes a job.
+JOOBLE_PAGES = 3                    # pages of Jooble results per search (about 20 jobs per page)
+ALERT_DAYS = 3                      # how many days back to read job-alert emails
 KEEP_DAYS = 30
 # ========================================================================
 
@@ -103,7 +105,8 @@ KW_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in KEYWORDS) + r")\b", r
 
 
 def rule_filter(j):
-    """Only rule: the job mentions at least one keyword (whole word, any case)."""
+    """Only rule: the job's title or details contain at least one keyword (whole word, any case).
+    No role, title, experience, salary or score check."""
     return bool(KW_RE.search(f"{j.get('title', '')} {j.get('desc', '')}"))
 
 
@@ -145,11 +148,17 @@ def fetch_jooble(query):
     key = env("JOOBLE_API_KEY")
     if not key:
         return []
-    r = requests.post(f"https://jooble.org/api/{key}", timeout=30,
-                      json={"keywords": query, "location": "India", "page": "1"})
-    r.raise_for_status()
+    raw = []
+    for page in range(1, JOOBLE_PAGES + 1):
+        r = requests.post(f"https://jooble.org/api/{key}", timeout=30,
+                          json={"keywords": query, "location": "India", "page": str(page)})
+        r.raise_for_status()
+        jobs = r.json().get("jobs", []) or []
+        raw += jobs
+        if len(jobs) < 10:
+            break
     out = []
-    for x in r.json().get("jobs", []) or []:
+    for x in raw:
         out.append({
             "title": clean(BeautifulSoup(x.get("title", ""), "html.parser").get_text()),
             "company": clean(x.get("company")), "location": clean(x.get("location")) or "India",
@@ -206,12 +215,16 @@ def fetch_jsearch(query):
 
 
 ALERT_SENDERS = {
-    "linkedin.com": "LinkedIn", "naukri.com": "Naukri", "indeed.com": "Indeed", "foundit.in": "foundit",
-    "instahyre.com": "Instahyre", "glassdoor.com": "Glassdoor", "hirist.tech": "Hirist", "cutshort.io": "Cutshort",
+    "linkedin.com": "LinkedIn", "naukri.com": "Naukri", "naukrigulf": None, "hirist.tech": "Hirist",
+    "hirist.com": "Hirist", "instahyre.com": "Instahyre", "foundit.in": "foundit", "indeed.com": "Indeed",
+    "glassdoor.com": "Glassdoor", "glassdoor.co.in": "Glassdoor", "cutshort.io": "Cutshort",
+    "iimjobs.com": "iimjobs", "wellfound.com": "Wellfound", "shine.com": "Shine",
 }
-JOB_LINK = re.compile(r"linkedin\.com/(?:comm/)?jobs/view/|naukri\.com/(?:job-listings|.*jid=)|indeed\.com/(?:rc/clk|viewjob|pagead)|"
-                      r"foundit\.in/job/|instahyre\.com/job|glassdoor\.co\.in/job-listing|glassdoor\.com/job-listing|"
-                      r"hirist\.tech/j/|cutshort\.io/job/", re.I)
+JOB_WORDS = re.compile(r"engineer|developer|architect|lead|consultant|analyst|specialist|manager|scientist|"
+                       r"data|etl|databricks|pyspark|azure|spark|big ?data|sde", re.I)
+SKIP_TEXT = {"view job", "apply now", "apply", "view details", "see job", "easy apply", "view all jobs", "see all jobs",
+             "view similar jobs", "unsubscribe", "manage alerts", "job alert", "search jobs", "view more jobs",
+             "see more jobs", "edit alert", "help", "privacy policy", "terms", "settings"}
 
 
 def _strip_tracking(url):
@@ -220,22 +233,51 @@ def _strip_tracking(url):
         m = re.search(r"/jobs/view/(\d+)", p.path)
         if m:
             return f"https://www.linkedin.com/jobs/view/{m.group(1)}/"
-    return urlunsplit((p.scheme, p.netloc, p.path, p.query if "indeed" in p.netloc or "jid=" in p.query else "", ""))
+    return url
+
+
+def _alert_jobs(body, name, date):
+    """Pull job title links out of a job-alert email. Works with tracked/redirect links too."""
+    soup = BeautifulSoup(body, "html.parser")
+    out, seen = [], set()
+    for a in soup.find_all("a", href=True):
+        href, text = a["href"], clean(a.get_text(" "))
+        if not href.startswith("http") or not (6 <= len(text) <= 120) or text.lower() in SKIP_TEXT:
+            continue
+        if not (JOB_WORDS.search(text) or KW_RE.search(text)) or re.search(r"unsubscribe|privacy|settings|help", href, re.I):
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        # company / location / skills usually follow the title link in the email
+        nxt = [clean(t) for t in a.find_all_next(string=True, limit=14)]
+        nxt = [t for t in nxt if t and t != text]
+        after = " ".join(nxt)[:250]
+        company = clean(re.split(r"[·|•]", nxt[0])[0])[:60] if nxt else ""
+        out.append({"title": text, "company": company, "location": "", "url": _strip_tracking(href),
+                    "source": f"{name} alert email", "posted": date, "desc": after, "from_email": True})
+    return out
 
 
 def fetch_gmail_alerts():
-    """Read job-alert emails (last 2 days) from your Gmail, read-only, and pull out job links."""
+    """Read job-alert emails from your Gmail (read-only, All Mail, last ALERT_DAYS days)."""
     user, pwd = env("GMAIL_USER"), env("GMAIL_APP_PASSWORD").replace(" ", "")
     if not (user and pwd):
         return []
-    out = []
+    out, per_source = [], {}
     M = imaplib.IMAP4_SSL("imap.gmail.com")
     M.login(user, pwd)
-    M.select("INBOX", readonly=True)
-    since = (datetime.now() - timedelta(days=2)).strftime("%d-%b-%Y")
+    typ, _ = M.select('"[Gmail]/All Mail"', readonly=True)   # catches alerts in Promotions/Updates/labels too
+    if typ != "OK":
+        M.select("INBOX", readonly=True)
+    since = (datetime.now() - timedelta(days=ALERT_DAYS)).strftime("%d-%b-%Y")
     for domain, name in ALERT_SENDERS.items():
+        if not name:
+            continue
         typ, data = M.search(None, f'(SINCE {since} FROM "{domain}")')
-        for num in (data[0].split() if data and data[0] else [])[-25:]:
+        nums = data[0].split() if data and data[0] else []
+        for num in nums[-40:]:
             typ, msg_data = M.fetch(num, "(RFC822)")
             msg = email.message_from_bytes(msg_data[0][1])
             body = ""
@@ -243,24 +285,12 @@ def fetch_gmail_alerts():
                 if part.get_content_type() == "text/html":
                     body = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "ignore")
                     break
-            if not body:
-                continue
-            soup = BeautifulSoup(body, "html.parser")
-            seen = set()
-            for a in soup.find_all("a", href=True):
-                href, text = a["href"], clean(a.get_text(" "))
-                if not JOB_LINK.search(href) or len(text) < 6 or len(text) > 120 or \
-                        text.lower() in {"view job", "apply now", "apply", "view details", "see job", "easy apply", "view all jobs"}:
-                    continue
-                url = _strip_tracking(href)
-                if url in seen:
-                    continue
-                seen.add(url)
-                # the company/location usually sit in the text right after the title link
-                after = clean(" ".join(s for s in a.find_all_next(string=True, limit=8)))[len(text):len(text) + 160]
-                out.append({"title": text, "company": "", "location": "", "url": url,
-                            "source": f"{name} alert email", "posted": msg.get("Date", ""),
-                            "desc": after, "from_email": True})
+            if body:
+                got = _alert_jobs(body, name, msg.get("Date", ""))
+                per_source[name] = per_source.get(name, 0) + len(got)
+                out += got
+        if nums:
+            print(f"  {name}: {len(nums)} alert emails, {per_source.get(name, 0)} jobs")
     M.logout()
     return out
 
