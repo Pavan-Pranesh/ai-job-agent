@@ -52,8 +52,8 @@ Python, SQL, T-SQL, SQL Server, Delta Lake, Medallion architecture, incremental 
 Azure DevOps CI/CD, Key Vault, Unity Catalog, Power BI.
 Wants: Data Engineer / Senior Data Engineer / Azure Data Engineer roles in India, 5-10 years, 18 LPA+."""
 # The AI score is only used to SORT jobs (best first). It never removes a job.
-LINKEDIN_PAGES = 100                 # 25 jobs per page, posted in the last 24 hours (stops early when results run out)
-NAUKRI_PAGES = 100                   # 20 jobs per page, posted in the last day (stops early when results run out)
+LINKEDIN_PAGES = 20                 # 25 jobs per page, posted in the last 24 hours (stops early when results run out)
+NAUKRI_PAGES = 20                   # 20 jobs per page, posted in the last day (stops early when results run out)
 JSEARCH_TERMS = 4                   # JSearch free quota is small: only the first N search terms, morning run only
 JOOBLE_PAGES = 3                    # pages of Jooble results per search (about 20 jobs per page)
 AI_BATCH = 20                       # jobs per AI request (fewer, bigger requests = faster)
