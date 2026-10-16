@@ -1,5 +1,5 @@
 {
- "updated": "2026-10-16T22:21+05:30",
+ "updated": "2026-10-16T22:28+05:30",
  "jobs": [
   {
    "title": "Vice President, Data Engineering",
@@ -16,7 +16,7 @@
    "sal_max": null,
    "score": 67,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Lead Data Engineer (Data Platforms)",
@@ -33,7 +33,7 @@
    "sal_max": null,
    "score": 65,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Senior Data Engineer, Data Engineering",
@@ -50,7 +50,7 @@
    "sal_max": null,
    "score": 62,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Principal Data Engineer (AWS, Databricks, Ai, ML Flow, Data Architecture, Apache Airflow)",
@@ -67,7 +67,7 @@
    "sal_max": null,
    "score": 60,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Data Scientist I",
@@ -84,7 +84,7 @@
    "sal_max": null,
    "score": 60,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Principal Data Engineer (Data Platforms)",
@@ -101,7 +101,7 @@
    "sal_max": null,
    "score": 53,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Lead, Software Engineer (Agentic workflows/APIs)",
@@ -118,7 +118,7 @@
    "sal_max": null,
    "score": 50,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Data Scientist II",
@@ -135,7 +135,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Data Scientist II",
@@ -152,7 +152,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "AI Engineer",
@@ -169,7 +169,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Manager, Product Management",
@@ -186,7 +186,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Manager, Software Engineering",
@@ -203,7 +203,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Software Engineer II",
@@ -220,7 +220,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   },
   {
    "title": "Data Scientist II-1",
@@ -237,45 +237,45 @@
    "sal_max": null,
    "score": 40,
    "reason": "keyword match",
-   "found": "2026-10-16T22:21+05:30"
+   "found": "2026-10-16T22:28+05:30"
   }
  ],
  "seen_ids": [
-  "69b64a335bad1636",
-  "d645198c8060bc96",
-  "507f99e66fc2c5c9",
-  "9deb379b409f153f",
-  "e11734e3ad169886",
-  "8af6d9d5f9e67b91",
-  "f20ba792d464af66",
-  "227d47a550169025",
-  "c83ec8a2ab3f3859",
-  "cc25efe15f7124f3",
-  "dfca4d668b6da6ca",
-  "2e7a073e2353f4c2",
-  "cb7b0a9957e4b019",
-  "a2ff841b0bc7b789",
-  "3370dcb36cd0afeb",
-  "b529641cba70f690",
-  "ac826469e0a8563d",
-  "177e905682714ef8",
-  "2355a5577ac3fdad",
   "cdf57c887d938377",
-  "e53f3518ed3ea348",
-  "0ea55d41ea2a1474",
-  "9c771b128d5dce37",
+  "ac826469e0a8563d",
   "9e5b4fdbc8979245",
-  "b17e65a49320b69f",
-  "9f8c7db3a5a7e1c2",
-  "3bb88b8422ded057",
-  "883e3d15a7efaf24",
-  "556d3e24f9b2eeb8",
-  "11ae21604314c84c",
-  "802910c696f1edec",
-  "f042d0a11177b752",
-  "bb763a802a923939",
-  "1eaaadaee7af7042",
+  "2355a5577ac3fdad",
   "66cb788e7f95ac9e",
-  "5acc880381652eb5"
+  "2e7a073e2353f4c2",
+  "883e3d15a7efaf24",
+  "dfca4d668b6da6ca",
+  "9deb379b409f153f",
+  "802910c696f1edec",
+  "cb7b0a9957e4b019",
+  "e53f3518ed3ea348",
+  "b529641cba70f690",
+  "507f99e66fc2c5c9",
+  "1eaaadaee7af7042",
+  "556d3e24f9b2eeb8",
+  "8af6d9d5f9e67b91",
+  "cc25efe15f7124f3",
+  "3370dcb36cd0afeb",
+  "f042d0a11177b752",
+  "9c771b128d5dce37",
+  "177e905682714ef8",
+  "bb763a802a923939",
+  "5acc880381652eb5",
+  "227d47a550169025",
+  "3bb88b8422ded057",
+  "a2ff841b0bc7b789",
+  "9f8c7db3a5a7e1c2",
+  "f20ba792d464af66",
+  "b17e65a49320b69f",
+  "69b64a335bad1636",
+  "11ae21604314c84c",
+  "d645198c8060bc96",
+  "c83ec8a2ab3f3859",
+  "e11734e3ad169886",
+  "0ea55d41ea2a1474"
  ]
 }
