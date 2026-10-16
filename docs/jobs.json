@@ -1,5 +1,5 @@
 {
- "updated": "2026-10-16T22:39+05:30",
+ "updated": "2026-10-16T22:44+05:30",
  "jobs": [
   {
    "title": "Vice President, Data Engineering",
@@ -16,7 +16,7 @@
    "sal_max": null,
    "score": 67,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Lead Data Engineer (Data Platforms)",
@@ -33,7 +33,7 @@
    "sal_max": null,
    "score": 65,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Senior Data Engineer, Data Engineering",
@@ -50,7 +50,7 @@
    "sal_max": null,
    "score": 62,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Principal Data Engineer (AWS, Databricks, Ai, ML Flow, Data Architecture, Apache Airflow)",
@@ -67,7 +67,7 @@
    "sal_max": null,
    "score": 60,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Data Scientist I",
@@ -84,7 +84,7 @@
    "sal_max": null,
    "score": 60,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Principal Data Engineer (Data Platforms)",
@@ -101,7 +101,7 @@
    "sal_max": null,
    "score": 53,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Lead, Software Engineer (Agentic workflows/APIs)",
@@ -118,7 +118,7 @@
    "sal_max": null,
    "score": 50,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Data Scientist II",
@@ -135,7 +135,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "AI Engineer",
@@ -152,7 +152,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Manager, Product Management",
@@ -169,7 +169,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Manager, Software Engineering",
@@ -186,7 +186,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Software Engineer II",
@@ -203,24 +203,7 @@
    "sal_max": null,
    "score": 45,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
-  },
-  {
-   "title": "Senior Data Scientist, Business Insights",
-   "company": "Mastercard",
-   "location": "India",
-   "url": "https://jooble.org/jdp/-7558209537027660253",
-   "source": "Jooble (fitly.work)",
-   "posted": "2026-09-28T00:00:00.0000000",
-   "salary_text": "",
-   "id": "11ae21604314c84c",
-   "exp_min": null,
-   "exp_max": null,
-   "sal_min": null,
-   "sal_max": null,
-   "score": 45,
-   "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   },
   {
    "title": "Data Scientist II-1",
@@ -237,45 +220,45 @@
    "sal_max": null,
    "score": 40,
    "reason": "keyword match",
-   "found": "2026-10-16T22:39+05:30"
+   "found": "2026-10-16T22:44+05:30"
   }
  ],
  "seen_ids": [
-  "d645198c8060bc96",
-  "8af6d9d5f9e67b91",
-  "177e905682714ef8",
-  "bb763a802a923939",
-  "3370dcb36cd0afeb",
-  "9e5b4fdbc8979245",
-  "883e3d15a7efaf24",
-  "e53f3518ed3ea348",
-  "a2ff841b0bc7b789",
-  "f20ba792d464af66",
-  "b17e65a49320b69f",
-  "f042d0a11177b752",
-  "cb7b0a9957e4b019",
-  "507f99e66fc2c5c9",
-  "5acc880381652eb5",
-  "9deb379b409f153f",
-  "dfca4d668b6da6ca",
   "ac826469e0a8563d",
-  "9f8c7db3a5a7e1c2",
-  "66cb788e7f95ac9e",
-  "cdf57c887d938377",
-  "b529641cba70f690",
-  "2355a5577ac3fdad",
-  "0ea55d41ea2a1474",
-  "2e7a073e2353f4c2",
-  "227d47a550169025",
-  "1eaaadaee7af7042",
-  "c83ec8a2ab3f3859",
-  "69b64a335bad1636",
-  "cc25efe15f7124f3",
-  "e11734e3ad169886",
+  "5acc880381652eb5",
   "556d3e24f9b2eeb8",
-  "9c771b128d5dce37",
+  "b17e65a49320b69f",
+  "3370dcb36cd0afeb",
+  "c83ec8a2ab3f3859",
+  "e53f3518ed3ea348",
+  "177e905682714ef8",
+  "d645198c8060bc96",
+  "e11734e3ad169886",
+  "b529641cba70f690",
+  "f042d0a11177b752",
+  "227d47a550169025",
   "11ae21604314c84c",
-  "3bb88b8422ded057",
-  "802910c696f1edec"
+  "9deb379b409f153f",
+  "9e5b4fdbc8979245",
+  "cc25efe15f7124f3",
+  "9f8c7db3a5a7e1c2",
+  "507f99e66fc2c5c9",
+  "802910c696f1edec",
+  "cdf57c887d938377",
+  "66cb788e7f95ac9e",
+  "cb7b0a9957e4b019",
+  "0ea55d41ea2a1474",
+  "9c771b128d5dce37",
+  "f20ba792d464af66",
+  "2e7a073e2353f4c2",
+  "bb763a802a923939",
+  "2355a5577ac3fdad",
+  "dfca4d668b6da6ca",
+  "1eaaadaee7af7042",
+  "69b64a335bad1636",
+  "8af6d9d5f9e67b91",
+  "a2ff841b0bc7b789",
+  "883e3d15a7efaf24",
+  "3bb88b8422ded057"
  ]
 }
