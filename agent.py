@@ -30,13 +30,17 @@ from bs4 import BeautifulSoup
 
 # ======================= YOUR SEARCH SETTINGS ===========================
 # Every source searches each of these terms (full job text is searched by the site itself).
-SEARCH_TERMS = ["PySpark", "Databricks", "Azure Data Factory", "ADF", "ADLS", "Synapse", "Python"]
+SEARCH_TERMS = ["PySpark", "Databricks", "Azure Data Factory", "ADF", "SQL", "ADLS", "Synapse", "Python"]
 QUERIES = SEARCH_TERMS
 COUNTRY = "in"                      # India
 
 # A job is sent if its title or description contains ANY ONE of these keywords.
 # Nothing else is checked (no experience, salary, title or AI-score filter).
-KEYWORDS = ["pyspark", "databricks", "adf", "azure data factory", "adls", "python", "synapse"]
+KEYWORDS = ["pyspark", "databricks", "adf", "azure data factory", "sql", "adls", "python", "synapse"]
+
+# Order of jobs in the CSV files and email: this group order first, then the most recently posted first.
+CATEGORY_ORDER = [("PySpark", ["pyspark"]), ("Databricks", ["databricks"]),
+                  ("ADF", ["adf", "azure data factory"]), ("SQL", ["sql"])]   # everything else comes after, as "Other"
 
 # Only jobs in these places are kept (location text is matched, any case). Remote / work-from-home is also kept.
 LOCATIONS = ["bangalore", "bengaluru", "coimbatore"]
@@ -61,7 +65,7 @@ AI_MAX_JOBS = 250                   # AI-score at most this many jobs per run; t
 EMAIL_MAX_ROWS = 120                # jobs shown in the email body (Gmail clips very long emails); all jobs are attached as CSV
 HTTP_TIMEOUT = 20                   # seconds before giving up on a slow site
 ALERT_DAYS = 3                      # how many days back to read job-alert emails
-KEEP_DAYS = 30
+KEEP_DAYS = 30                      # jobs older than this (since first found) drop out of the CSV files
 # ========================================================================
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -134,6 +138,8 @@ LOC_RE = re.compile("|".join(re.escape(l) for l in LOCATIONS), re.I)
 def location_ok(j):
     """Keep only Bangalore / Coimbatore / remote jobs."""
     loc = j.get("location") or ""
+    if FOREIGN_RE.search(f"{loc} {j.get('title', '')}") and not LOC_RE.search(loc):
+        return False                       # remote jobs based abroad (US/UK/...) are not wanted
     if j.get("remote") and ALLOW_REMOTE:
         return True
     if LOC_RE.search(loc) or (ALLOW_REMOTE and REMOTE_RE.search(loc)):
@@ -147,6 +153,68 @@ def location_ok(j):
             return True
         return KEEP_UNKNOWN_LOCATION
     return False
+
+
+def posted_iso(j):
+    """Turn each site's 'posted' value into a sortable timestamp (falls back to when we found the job)."""
+    raw = str(j.get("posted") or "").strip()
+    now = datetime.now(IST)
+    if raw:
+        try:                                            # ISO dates (LinkedIn, Jooble, JSearch)
+            d = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return (d if d.tzinfo else d.replace(tzinfo=IST)).astimezone(IST).isoformat(timespec="minutes")
+        except ValueError:
+            pass
+        try:                                            # email Date header
+            from email.utils import parsedate_to_datetime
+            return parsedate_to_datetime(raw).astimezone(IST).isoformat(timespec="minutes")
+        except Exception:
+            pass
+        low = raw.lower()                               # Naukri style: "Just now", "Today", "3 days ago", "1 week ago"
+        if "just" in low or "today" in low or "few hours" in low or "hour" in low or "minute" in low:
+            return now.isoformat(timespec="minutes")
+        m = re.search(r"(\d+)\+?\s*(day|week|month)", low)
+        if m:
+            n = int(m.group(1)) * {"day": 1, "week": 7, "month": 30}[m.group(2)]
+            return (now - timedelta(days=n)).isoformat(timespec="minutes")
+    return j.get("found") or now.isoformat(timespec="minutes")
+
+
+def category(j):
+    """PySpark / Databricks / ADF / SQL / Other, using the keyword it was searched or matched by."""
+    text = " ".join([j.get("title", ""), j.get("desc", ""), " ".join(j.get("matched", [])), j.get("search_kw", "")]).lower()
+    for name, words in CATEGORY_ORDER:
+        if any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in words):
+            return name
+    return "Other"
+
+
+FOREIGN_RE = re.compile(r"united states|\busa\b|\bu\.s\.|canada|united kingdom|\buk\b|england|london|europe|germany|"
+                        r"netherlands|france|poland|spain|ireland|australia|singapore|dubai|\buae\b|saudi|qatar|"
+                        r"philippines|mexico|brazil|south africa|, ?[A-Z]{2}\b(?! *india)|\bc2c\b|\bw2\b|\bemea\b|\bapac\b", re.I)
+CITY_FILES = [("Bangalore", re.compile(r"bangalore|bengaluru", re.I)), ("Coimbatore", re.compile(r"coimbatore", re.I))]
+
+
+def city_groups(j):
+    """Which CSV files a job belongs in: Bangalore, Coimbatore and/or Remote."""
+    loc = f"{j.get('location', '')} {j.get('title', '')}"
+    groups = [name for name, rx in CITY_FILES if rx.search(loc)]
+    if (j.get("remote") or REMOTE_RE.search(loc)) and not FOREIGN_RE.search(f"{j.get('location', '')} {j.get('title', '')}"):
+        groups.append("Remote")
+    if not groups:                                   # location only found in the details
+        txt = j.get("desc", "")[:400]
+        groups = [name for name, rx in CITY_FILES if rx.search(txt)] or (
+            ["Remote"] if REMOTE_RE.search(txt) and not FOREIGN_RE.search(f"{loc} {txt}") else [])
+    return groups
+
+
+def sort_key(j):
+    names = [n for n, _ in CATEGORY_ORDER] + ["Other"]
+    cat = j.get("category") or category(j)
+    day = (j.get("posted_iso") or "")[:10]             # posting date (LinkedIn only gives the day)
+    day_num = int(day.replace("-", "")) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else 0
+    found = re.sub(r"\D", "", j.get("found") or "")[:12]
+    return (names.index(cat) if cat in names else len(names), -day_num, -int(found or 0))   # group, newest posting, newest found
 
 
 def enrich(j):
@@ -188,14 +256,14 @@ def fetch_jooble(query):
     if not key:
         return []
     raw = []
-    for place in ["Bangalore", "Coimbatore", "Remote"]:
+    for place, kw in [("Bangalore", query), ("Coimbatore", query), ("India", f"{query} remote")]:
         for page in range(1, JOOBLE_PAGES + 1):
             r = requests.post(f"https://jooble.org/api/{key}", timeout=HTTP_TIMEOUT,
-                              json={"keywords": query, "location": place, "page": str(page)})
+                              json={"keywords": kw, "location": place, "page": str(page)})
             r.raise_for_status()
             jobs = r.json().get("jobs", []) or []
             for x in jobs:
-                x["_remote"] = place == "Remote"
+                x["_remote"] = place == "India"
             raw += jobs
             if len(jobs) < 10:
                 break
@@ -582,52 +650,65 @@ def fmt_sal(j):
     return "salary not disclosed"
 
 
-def send_email(jobs):
-    user, pwd, to = env("GMAIL_USER"), env("GMAIL_APP_PASSWORD").replace(" ", ""), env("EMAIL_TO") or env("GMAIL_USER")
-    if not (user and pwd) or not jobs:
-        return
-    rows = []
-    for j in jobs[:EMAIL_MAX_ROWS]:
-        badge = "#1a7f37" if j["score"] >= 80 else "#9a6700" if j["score"] >= 70 else "#57606a"
-        rows.append(f"""
-<tr><td style="padding:12px 14px;border-bottom:1px solid #e5e7eb">
-  <div style="font-size:15px;font-weight:600"><a href="{html.escape(j['url'])}" style="color:#1d4ed8;text-decoration:none">{html.escape(j['title'])}</a></div>
-  <div style="color:#374151;font-size:13px;margin-top:2px">{html.escape(j['company'] or '-')} &middot; {html.escape(j['location'] or 'India')}</div>
-  <div style="color:#6b7280;font-size:12px;margin-top:4px">{fmt_exp(j)} &middot; {fmt_sal(j)} &middot; {html.escape(j['source'])}</div>
-  <div style="color:#4b5563;font-size:12px;margin-top:4px;font-style:italic">{html.escape(j.get('reason', ''))}</div>
-</td><td style="padding:12px 14px;border-bottom:1px solid #e5e7eb;text-align:right;vertical-align:top">
-  <span style="background:{badge};color:#fff;border-radius:12px;padding:3px 9px;font-size:12px;font-weight:600">{j['score']}</span>
-</td></tr>""")
-    dash = env("DASHBOARD_URL")
-    body = f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:680px;margin:auto">
-<h2 style="color:#2E3A4F;margin-bottom:4px">{len(jobs)} new Azure Data Engineer jobs</h2>
-<div style="color:#6b7280;font-size:13px;margin-bottom:12px">Jobs mentioning any of: {", ".join(KEYWORDS)} &middot; Bangalore, Coimbatore or Remote. Sorted by AI match score.</div>
-{f'<div style="font-size:13px;margin-bottom:10px">Showing the top {EMAIL_MAX_ROWS} by match score. <b>All {len(jobs)} jobs are in the attached CSV</b> (opens in Excel / Google Sheets).</div>' if len(jobs) > EMAIL_MAX_ROWS else ''}
-<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px">{''.join(rows)}</table>
-{f'<p style="font-size:13px"><a href="{dash}">Open your job dashboard</a></p>' if dash else ''}
-<p style="color:#9ca3af;font-size:11px">Sent by your AI Job Agent on GitHub Actions.</p></div>"""
+def _csv_bytes(rows):
     import csv, io
-    from email.mime.application import MIMEApplication
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = f"[Job Agent] {len(jobs)} new jobs - top: {jobs[0]['title']} @ {jobs[0]['company'] or 'n/a'}"
-    msg["From"], msg["To"] = f"AI Job Agent <{user}>", to
-    alt = MIMEMultipart("alternative")
-    alt.attach(MIMEText("\n\n".join(f"{j['title']} | {j['company']} | {fmt_exp(j)} | {fmt_sal(j)}\n{j['url']}" for j in jobs[:EMAIL_MAX_ROWS]), "plain"))
-    alt.attach(MIMEText(body, "html"))
-    msg.attach(alt)
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["Score", "Title", "Company", "Location", "Experience", "Salary", "Source", "Matched keyword", "Link"])
-    for j in jobs:
-        w.writerow([j["score"], j["title"], j["company"], j["location"], fmt_exp(j), fmt_sal(j), j["source"],
-                    j.get("search_kw", ""), j["url"]])
-    part = MIMEApplication(buf.getvalue().encode("utf-8-sig"), Name="jobs.csv")
-    part["Content-Disposition"] = f'attachment; filename="jobs_{datetime.now(IST):%Y-%m-%d_%H%M}.csv"'
-    msg.attach(part)
+    w.writerow(["Category", "Posted", "New this run", "Title", "Company", "Location", "Experience", "Salary",
+                "Source", "Matched keywords", "Score", "First found", "Link"])
+    for j in rows:
+        w.writerow([j.get("category", ""), (j.get("posted_iso") or "")[:10],
+                    "NEW" if j.get("new") else "", j["title"], j.get("company", ""), j.get("location", ""),
+                    fmt_exp(j), fmt_sal(j), j.get("source", ""),
+                    ", ".join(j.get("matched") or ([j["search_kw"]] if j.get("search_kw") else [])),
+                    j.get("score", ""), (j.get("found") or "")[:16].replace("T", " "), j["url"]])
+    return buf.getvalue().encode("utf-8-sig")       # utf-8-sig so Excel shows ₹ and names correctly
+
+
+def send_email(new_jobs, all_jobs):
+    user, pwd, to = env("GMAIL_USER"), env("GMAIL_APP_PASSWORD").replace(" ", ""), env("EMAIL_TO") or env("GMAIL_USER")
+    if not (user and pwd) or not all_jobs:
+        return
+    from email.mime.application import MIMEApplication
+    files = {name: [j for j in all_jobs if name in j.get("cities", [])] for name in ["Bangalore", "Coimbatore", "Remote"]}
+    rows = []
+    for j in new_jobs[:EMAIL_MAX_ROWS]:
+        rows.append(f"""
+<tr><td style="padding:10px 12px;border-bottom:1px solid #e5e7eb">
+  <div style="font-size:11px;color:#2E3A4F;font-weight:700;letter-spacing:.3px">{html.escape(j.get('category', ''))} &middot; posted {html.escape((j.get('posted_iso') or '')[:10])}</div>
+  <div style="font-size:15px;font-weight:600;margin-top:2px"><a href="{html.escape(j['url'])}" style="color:#1d4ed8;text-decoration:none">{html.escape(j['title'])}</a></div>
+  <div style="color:#374151;font-size:13px;margin-top:2px">{html.escape(j['company'] or '-')} &middot; {html.escape(j['location'] or '-')}</div>
+  <div style="color:#6b7280;font-size:12px;margin-top:3px">{fmt_exp(j)} &middot; {fmt_sal(j)} &middot; {html.escape(j['source'])}</div>
+</td></tr>""")
+    counts = " &middot; ".join(f"<b>{n}</b>: {len(v)} jobs" for n, v in files.items())
+    dash = env("DASHBOARD_URL")
+    body = f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:680px;margin:auto">
+<h2 style="color:#2E3A4F;margin-bottom:4px">{len(new_jobs)} new jobs this run</h2>
+<div style="color:#374151;font-size:13px;margin-bottom:6px">Attached: 3 CSV files with <b>all jobs from the last {KEEP_DAYS} days</b> (this run's jobs on top, marked NEW) &mdash; {counts}.</div>
+<div style="color:#6b7280;font-size:12px;margin-bottom:12px">Order: PySpark, Databricks, ADF, SQL, then others &middot; most recent posting first within each.
+{f' Showing the first {EMAIL_MAX_ROWS} new jobs below; all are in the files.' if len(new_jobs) > EMAIL_MAX_ROWS else ''}</div>
+<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb">{''.join(rows) or '<tr><td style="padding:12px">No new jobs since the last run. The attached files still have everything collected so far.</td></tr>'}</table>
+{f'<p style="font-size:13px"><a href="{dash}">Open your job dashboard</a></p>' if dash else ''}
+<p style="color:#9ca3af;font-size:11px">Sent by your AI Job Agent on GitHub Actions.</p></div>"""
+    msg = MIMEMultipart("mixed")
+    top = new_jobs[0] if new_jobs else None
+    msg["Subject"] = (f"[Job Agent] {len(new_jobs)} new jobs" + (f" - {top['category']}: {top['title']}" if top else "")
+                      + f" | Blr {len(files['Bangalore'])} / Cbe {len(files['Coimbatore'])} / Remote {len(files['Remote'])}")
+    msg["From"], msg["To"] = f"AI Job Agent <{user}>", to
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText("\n\n".join(f"[{j.get('category')}] {j['title']} | {j['company']} | {j['location']}\n{j['url']}"
+                                     for j in new_jobs[:EMAIL_MAX_ROWS]) or "No new jobs this run.", "plain"))
+    alt.attach(MIMEText(body, "html"))
+    msg.attach(alt)
+    stamp = f"{datetime.now(IST):%Y-%m-%d_%H%M}"
+    for name, rows_ in files.items():
+        part = MIMEApplication(_csv_bytes(rows_), Name=f"{name}_jobs.csv")
+        part["Content-Disposition"] = f'attachment; filename="{name}_jobs_{stamp}.csv"'
+        msg.attach(part)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(user, pwd)
         s.sendmail(user, [a.strip() for a in to.split(",")], msg.as_string())
-    print(f"Email sent to {to}")
+    print(f"Email sent to {to} with 3 CSV files: " + ", ".join(f"{n} {len(v)}" for n, v in files.items()))
 
 
 def send_whatsapp(text):
@@ -731,7 +812,7 @@ def main():
                   " not your normal Gmail password")
     print(f"Fetched {len(found)} jobs")
 
-    candidates, ids = [], set()
+    candidates, ids, by_id = [], set(), {}
     dup, old, nokw, noloc = 0, 0, 0, 0
     for j in found:
         if not j.get("title") or not j.get("url"):
@@ -739,7 +820,12 @@ def main():
         j["id"] = job_id(j["title"], j["company"], j["url"])
         if j["id"] in ids:
             dup += 1
+            first = by_id.get(j["id"])
+            if first is not None and j.get("search_kw") and j["search_kw"] not in first["matched"]:
+                first["matched"].append(j["search_kw"])
             continue
+        j["matched"] = [j["search_kw"]] if j.get("search_kw") else []
+        by_id[j["id"]] = j
         ids.add(j["id"])
         if j["id"] in seen:
             old += 1
@@ -754,27 +840,38 @@ def main():
           f"{nokw} without any keyword, {noloc} outside Bangalore/Coimbatore/Remote -> {len(candidates)} new matches")
     print(f"New after filters: {len(candidates)}")
 
-    scored = ai_score(candidates)          # score is used for sorting only
-    scored.sort(key=lambda j: j["score"], reverse=True)
-    print(f"Matches (any keyword): {len(scored)}")
-
+    scored = ai_score(candidates)          # score is shown in the files; order is category, then most recent
     now = datetime.now(IST).isoformat(timespec="minutes")
     for j in scored:
-        j.pop("desc", None)
         j["found"] = now
-    if dry:
-        for j in scored:
-            print(f"{j['score']:>3} | {j['title']} | {j['company']} | {fmt_exp(j)} | {fmt_sal(j)}")
-        return
+        j["posted_iso"] = posted_iso(j)
+        j["category"] = category(j)
+        j["cities"] = city_groups(j)
+        j["new"] = True
+        j.pop("desc", None)
+    scored.sort(key=sort_key)
+    print(f"New jobs this run: {len(scored)}")
+
+    # history: keep every job from the last KEEP_DAYS days, newest runs appended on top
     cutoff = (datetime.now(IST) - timedelta(days=KEEP_DAYS)).isoformat()
-    store["jobs"] = [j for j in scored + store["jobs"] if j.get("found", "") >= cutoff]
-    # remember rejected ids too, so the same job is not re-scored every run (bounded list)
-    store["seen_ids"] = (list(ids) + store.get("seen_ids", []))[:5000]
+    history = [dict(j, new=False) for j in store["jobs"] if j.get("found", "") >= cutoff]
+    for j in history:                      # jobs saved by older versions of the agent
+        j.setdefault("posted_iso", posted_iso(j))
+        j.setdefault("category", category(j))
+        j["cities"] = city_groups(j)
+    all_jobs = sorted(scored + history, key=sort_key)
+    if dry:
+        for j in scored[:50]:
+            print(f"{j['category']:10} {j['posted_iso'][:16]} | {j['title'][:50]} | {j['company'][:25]} | {','.join(j['cities'])}")
+        return
+    store["jobs"] = [{k: v for k, v in j.items() if k != "new"} for j in scored + history]
+    # remember every job id we have seen (also rejected ones) so nothing is processed twice
+    store["seen_ids"] = (list(ids) + store.get("seen_ids", []))[:60000]
     store["updated"] = now
     os.makedirs(os.path.dirname(JOBS_FILE), exist_ok=True)
     json.dump(store, open(JOBS_FILE, "w"), indent=1, ensure_ascii=False)
 
-    send_email(scored)
+    send_email(scored, all_jobs)
     notify_chat(scored)
 
 
