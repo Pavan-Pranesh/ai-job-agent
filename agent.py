@@ -161,15 +161,32 @@ def fetch_jooble(query):
     return out
 
 
+JSEARCH_HOST = os.environ.get("JSEARCH_HOST") or "jsearch.p.rapidapi.com"
+# JSearch renamed its endpoint in newer API versions; try the known names until one exists.
+JSEARCH_PATHS = [p for p in [os.environ.get("JSEARCH_PATH")] if p] + ["/job-search", "/search-v2", "/jobs/search", "/search"]
+_jsearch_path = None
+
+
 def fetch_jsearch(query):
+    global _jsearch_path
     key = env("RAPIDAPI_KEY")
     if not key:
         return []
-    r = requests.get("https://jsearch.p.rapidapi.com/search", timeout=40,
-                     headers={"X-RapidAPI-Key": key, "X-RapidAPI-Host": "jsearch.p.rapidapi.com"},
-                     params={"query": f"{query} in India", "page": 1, "num_pages": 1,
-                             "country": "in", "date_posted": "3days"})
-    r.raise_for_status()
+    headers = {"X-RapidAPI-Key": key, "X-RapidAPI-Host": JSEARCH_HOST}
+    params = {"query": f"{query} in India", "page": 1, "num_pages": 1, "country": "in", "date_posted": "3days"}
+    for path in ([_jsearch_path] if _jsearch_path else JSEARCH_PATHS):
+        r = requests.get(f"https://{JSEARCH_HOST}{path}", timeout=40, headers=headers, params=params)
+        if r.status_code == 404 and not _jsearch_path:
+            print(f"  JSearch path {path} not found, trying next")
+            time.sleep(1.5)
+            continue
+        r.raise_for_status()
+        if not _jsearch_path:
+            print(f"  JSearch working path: {path}")
+        _jsearch_path = path
+        break
+    else:
+        raise RuntimeError("no JSearch search path worked; send Claude the Code snippet from RapidAPI")
     out = []
     for x in r.json().get("data", []) or []:
         months = ((x.get("job_required_experience") or {}).get("required_experience_in_months"))
