@@ -1,0 +1,51 @@
+name: AI Job Agent
+
+on:
+  schedule:
+    # Times are UTC. IST = UTC + 5:30  ->  8:15, 12:15, 16:15, 20:15 IST
+    - cron: "45 2 * * *"        # morning run also searches JSearch (LinkedIn/Indeed/Naukri via Google for Jobs)
+    - cron: "45 6,10,14 * * *"
+  workflow_dispatch:            # "Run workflow" button in the Actions tab
+
+permissions:
+  contents: write
+
+concurrency: job-agent
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Find, score and send jobs
+        env:
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          CALLMEBOT_PHONE: ${{ secrets.CALLMEBOT_PHONE }}
+          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+        run: |
+          if [ "${{ github.event.schedule }}" = "45 2 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python agent.py --with-jsearch
+          else
+            python agent.py
+          fi
+      - name: Save job list
+        run: |
+          git config user.name "job-agent-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add docs/jobs.json
+          git diff --cached --quiet || git commit -m "Update jobs $(date -u +%F_%H%M)"
+          git push

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Agent</title>
+<style>
+:root{--bg:#f4f6f9;--card:#fff;--text:#1f2937;--muted:#6b7280;--line:#e5e7eb;--acc:#2E3A4F;--chip:#eef2f7;--good:#1a7f37;--mid:#9a6700;--low:#57606a}
+@media (prefers-color-scheme:dark){:root{--bg:#0f141b;--card:#18202b;--text:#e5e7eb;--muted:#9aa4b2;--line:#273142;--acc:#9fb4d6;--chip:#222c3a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 "Segoe UI",system-ui,Arial,sans-serif}
+header{background:#2E3A4F;color:#fff;padding:18px 16px}header h1{margin:0;font-size:20px}header p{margin:4px 0 0;opacity:.8;font-size:13px}
+.wrap{max-width:860px;margin:auto;padding:14px 16px 40px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+input[type=search]{flex:1;min-width:180px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font-size:14px}
+select{padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text)}
+.chip{padding:7px 12px;border-radius:16px;background:var(--chip);border:1px solid var(--line);cursor:pointer;font-size:13px;color:var(--text)}
+.chip.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;display:flex;gap:12px}
+.card.applied{opacity:.55}.main{flex:1;min-width:0}
+.t{font-weight:600;font-size:15px}.t a{color:inherit;text-decoration:none}.t a:hover{text-decoration:underline}
+.m{color:var(--muted);font-size:13px;margin-top:2px}.r{font-size:12.5px;font-style:italic;color:var(--muted);margin-top:4px}
+.score{min-width:42px;height:28px;border-radius:14px;color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px}
+.side{display:flex;flex-direction:column;align-items:center;gap:8px}.side label{font-size:11px;color:var(--muted);display:flex;flex-direction:column;align-items:center;cursor:pointer}
+.empty{text-align:center;color:var(--muted);padding:40px 0}
+</style>
+</head>
+<body>
+<header><h1>AI Job Agent</h1><p id="meta">Loading…</p></header>
+<div class="wrap">
+  <div class="bar">
+    <input type="search" id="q" placeholder="Search title, company, city…">
+    <select id="min"><option value="0">Any score</option><option value="70">70+</option><option value="80">80+</option></select>
+  </div>
+  <div class="bar" id="chips"></div>
+  <div id="list"></div>
+</div>
+<script>
+const TAGS=["Databricks","PySpark","ADF","Synapse","Senior","Bengaluru","Remote","Hide applied"];
+let jobs=[],on=new Set(),applied=new Set();
+try{applied=new Set(JSON.parse(localStorage.getItem("applied")||"[]"))}catch(e){}
+const save=()=>{try{localStorage.setItem("applied",JSON.stringify([...applied]))}catch(e){}};
+const esc=s=>String(s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const exp=j=>j.exp_min!=null&&j.exp_max!=null?`${j.exp_min}-${j.exp_max} yrs`:j.exp_min!=null?`${j.exp_min}+ yrs`:"exp n/a";
+const sal=j=>j.sal_min&&j.sal_max?`₹${j.sal_min}-${j.sal_max} LPA`:(j.sal_min||j.sal_max)?`₹${j.sal_min||j.sal_max} LPA`:"salary not disclosed";
+const col=s=>s>=80?"var(--good)":s>=70?"var(--mid)":"var(--low)";
+document.getElementById("chips").innerHTML=TAGS.map(t=>`<button class="chip" data-t="${t}">${t}</button>`).join("");
+document.getElementById("chips").onclick=e=>{const t=e.target.dataset.t;if(!t)return;on.has(t)?on.delete(t):on.add(t);e.target.classList.toggle("on");render()};
+["q","min"].forEach(id=>document.getElementById(id).oninput=render);
+function render(){
+  const q=document.getElementById("q").value.toLowerCase(),min=+document.getElementById("min").value;
+  const out=jobs.filter(j=>{
+    const hay=`${j.title} ${j.company} ${j.location} ${j.reason} ${j.source}`.toLowerCase();
+    if(q&&!hay.includes(q))return false;if((j.score||0)<min)return false;
+    for(const t of on){if(t==="Hide applied"){if(applied.has(j.id))return false}
+      else if(t==="Bengaluru"){if(!/bengaluru|bangalore/.test(hay))return false}
+      else if(!hay.includes(t.toLowerCase()))return false}
+    return true});
+  document.getElementById("list").innerHTML=out.length?out.map(j=>`
+  <div class="card ${applied.has(j.id)?"applied":""}">
+    <div class="main"><div class="t"><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></div>
+    <div class="m">${esc(j.company||"-")} · ${esc(j.location||"India")}</div>
+    <div class="m">${exp(j)} · ${sal(j)} · ${esc(j.source)} · ${esc((j.found||"").slice(0,10))}</div>
+    ${j.reason?`<div class="r">${esc(j.reason)}</div>`:""}</div>
+    <div class="side"><div class="score" style="background:${col(j.score)}">${j.score??"-"}</div>
+    <label><input type="checkbox" data-id="${j.id}" ${applied.has(j.id)?"checked":""}>Applied</label></div>
+  </div>`).join(""):`<div class="empty">No jobs match these filters yet.</div>`;
+}
+document.getElementById("list").onchange=e=>{const id=e.target.dataset.id;if(!id)return;e.target.checked?applied.add(id):applied.delete(id);save();render()};
+fetch("jobs.json?"+Date.now()).then(r=>r.json()).then(d=>{jobs=(d.jobs||[]).sort((a,b)=>(b.found||"").localeCompare(a.found||"")||(b.score||0)-(a.score||0));
+  document.getElementById("meta").textContent=`${jobs.length} matched jobs · last checked ${d.updated?d.updated.replace("T"," ").slice(0,16)+" IST":"never"}`;render()})
+.catch(()=>{document.getElementById("meta").textContent="Could not load jobs.json"});
+</script>
+</body>
+</html>
