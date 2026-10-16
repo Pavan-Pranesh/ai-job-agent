@@ -35,7 +35,7 @@ COUNTRY = "in"                      # India
 
 # A job is sent if its title or description contains ANY ONE of these keywords.
 # Nothing else is checked (no experience, salary, title or AI-score filter).
-KEYWORDS = ["pyspark", "databricks", "adf", "azure data factory", "adls", "python", "synapse" , "azure data factory" , "fabric" , "azure sql","data lake","delta" ]
+KEYWORDS = ["pyspark", "databricks", "adf", "azure data factory", "adls", "python", "synapse"]
 
 MAX_WHATSAPP = 8                    # only used if WhatsApp/Telegram secrets are added
 EXP_MIN, EXP_MAX, MIN_SALARY_LPA = 5, 10, 18   # shown in the email text only, not used as filters
@@ -404,16 +404,32 @@ def main():
     seen = {j["id"] for j in store["jobs"]} | set(store.get("seen_ids", []))
 
     found = []
+    print("---- Source check ----")
+    for name, keys in [("Adzuna", ["ADZUNA_APP_ID", "ADZUNA_APP_KEY"]), ("Jooble", ["JOOBLE_API_KEY"]),
+                       ("JSearch", ["RAPIDAPI_KEY"]), ("Gmail", ["GMAIL_USER", "GMAIL_APP_PASSWORD"]),
+                       ("Groq AI", ["GROQ_API_KEY"])]:
+        missing = [k for k in keys if not env(k)]
+        print(f"{name:8}: {'MISSING secret ' + ', '.join(missing) if missing else 'key found'}")
+    if not use_jsearch:
+        print("JSearch : skipped on this run (it runs on the morning run and on manual runs)")
+    print("----------------------")
+    sources = [fetch_adzuna, fetch_jooble] + ([fetch_jsearch] if use_jsearch else [])
     for q in QUERIES:
-        for fetch in [fetch_adzuna, fetch_jooble] + ([fetch_jsearch] if use_jsearch else []):
+        for fetch in sources:
             try:
-                found += fetch(q)
+                got = fetch(q)
+                print(f"{fetch.__name__.replace('fetch_', ''):8} '{q}': {len(got)} jobs")
+                found += got
+            except requests.HTTPError as e:
+                print(f"{fetch.__name__} '{q}' FAILED: HTTP {e.response.status_code} {e.response.text[:200]}")
             except Exception as e:
-                print(f"{fetch.__name__}('{q}') failed: {e}")
+                print(f"{fetch.__name__} '{q}' FAILED: {e}")
     try:
-        found += fetch_gmail_alerts()
+        got = fetch_gmail_alerts()
+        print(f"gmail alert emails: {len(got)} jobs")
+        found += got
     except Exception as e:
-        print("Gmail alert reading failed:", e)
+        print("Gmail alert reading FAILED:", e)
     print(f"Fetched {len(found)} jobs")
 
     candidates, ids = [], set()
