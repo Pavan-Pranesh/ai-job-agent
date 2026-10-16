@@ -47,10 +47,14 @@ Python, SQL, T-SQL, SQL Server, Delta Lake, Medallion architecture, incremental 
 Azure DevOps CI/CD, Key Vault, Unity Catalog, Power BI.
 Wants: Data Engineer / Senior Data Engineer / Azure Data Engineer roles in India, 5-10 years, 18 LPA+."""
 # The AI score is only used to SORT jobs (best first). It never removes a job.
-LINKEDIN_PAGES = 1                  # 25 jobs per page, posted in the last 24 hours
-NAUKRI_PAGES = 1                    # 20 jobs per page, posted in the last day
+LINKEDIN_PAGES = 2                 # 25 jobs per page, posted in the last 24 hours (stops early when results run out)
+NAUKRI_PAGES = 2                  # 20 jobs per page, posted in the last day (stops early when results run out)
 JSEARCH_TERMS = 4                   # JSearch free quota is small: only the first N search terms, morning run only
 JOOBLE_PAGES = 3                    # pages of Jooble results per search (about 20 jobs per page)
+AI_BATCH = 20                       # jobs per AI request (fewer, bigger requests = faster)
+AI_MAX_JOBS = 250                   # AI-score at most this many jobs per run; the rest get a quick keyword score
+EMAIL_MAX_ROWS = 120                # jobs shown in the email body (Gmail clips very long emails); all jobs are attached as CSV
+HTTP_TIMEOUT = 20                   # seconds before giving up on a slow site
 ALERT_DAYS = 3                      # how many days back to read job-alert emails
 KEEP_DAYS = 30
 # ========================================================================
@@ -133,7 +137,7 @@ def fetch_adzuna(query):
     if not (app_id and app_key):
         return []
     out = []
-    r = requests.get(f"https://api.adzuna.com/v1/api/jobs/{COUNTRY}/search/1", timeout=30, params={
+    r = requests.get(f"https://api.adzuna.com/v1/api/jobs/{COUNTRY}/search/1", timeout=HTTP_TIMEOUT, params={
         "app_id": app_id, "app_key": app_key, "what": query, "results_per_page": 50,
         "max_days_old": 3, "sort_by": "date", "content-type": "application/json"})
     r.raise_for_status()
@@ -158,7 +162,7 @@ def fetch_jooble(query):
         return []
     raw = []
     for page in range(1, JOOBLE_PAGES + 1):
-        r = requests.post(f"https://jooble.org/api/{key}", timeout=30,
+        r = requests.post(f"https://jooble.org/api/{key}", timeout=HTTP_TIMEOUT,
                           json={"keywords": query, "location": "India", "page": str(page)})
         r.raise_for_status()
         jobs = r.json().get("jobs", []) or []
@@ -222,11 +226,21 @@ def fetch_jsearch(query):
     return out
 
 
+import threading
+_local = threading.local()
+
+
+def http():
+    if not hasattr(_local, "s"):
+        _local.s = requests.Session()
+    return _local.s
+
+
 BROWSER = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                          "Chrome/129.0 Safari/537.36", "Accept-Language": "en-IN,en;q=0.9"}
 
 
-def _pause(a=3, b=6):
+def _pause(a=1.5, b=3):
     import random
     time.sleep(random.uniform(a, b))
 
@@ -235,7 +249,7 @@ def fetch_linkedin(term):
     """LinkedIn public (no login) job search, India, posted in the last 24 hours."""
     out = []
     for start in range(0, LINKEDIN_PAGES * 25, 25):
-        r = requests.get("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search", timeout=30,
+        r = http().get("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search", timeout=HTTP_TIMEOUT,
                          headers=BROWSER, params={"keywords": term, "location": "India", "f_TPR": "r86400",
                                                   "start": start})
         if r.status_code == 429:
@@ -270,7 +284,7 @@ def fetch_naukri(term):
                                "Accept": "application/json", "Referer": f"https://www.naukri.com/{slug}-jobs"})
     out = []
     for page in range(1, NAUKRI_PAGES + 1):
-        r = requests.get("https://www.naukri.com/jobapi/v3/search", timeout=30, headers=headers, params={
+        r = http().get("https://www.naukri.com/jobapi/v3/search", timeout=HTTP_TIMEOUT, headers=headers, params={
             "noOfResults": 20, "urlType": "search_by_keyword", "searchType": "adv", "keyword": term,
             "pageNo": page, "k": term, "seoKey": f"{slug}-jobs", "src": "jobsearchDesk", "latLong": "", "jobAge": 1})
         r.raise_for_status()
@@ -288,7 +302,7 @@ def fetch_naukri(term):
                         "search_kw": term})
         if len(jobs) < 20:
             break
-        _pause(2, 4)
+        _pause(1, 2)
     return out
 
 
@@ -311,7 +325,7 @@ def _walk_jobs(obj, found):
 def fetch_hirist(term):
     """Hirist public search page (tech jobs, India)."""
     slug = re.sub(r"[^a-z0-9]+", "-", term.lower()).strip("-")
-    r = requests.get(f"https://www.hirist.tech/search/{slug}-jobs", timeout=30, headers=BROWSER,
+    r = http().get(f"https://www.hirist.tech/search/{slug}-jobs", timeout=HTTP_TIMEOUT, headers=BROWSER,
                      params={"minexp": 3, "maxexp": 15})
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
@@ -435,12 +449,15 @@ def ai_score(jobs):
     """Score jobs with Groq (free). Falls back to a keyword score if no key or on error."""
     key = env("GROQ_API_KEY")
     models = groq_models(key) if key else []
-    for i in range(0, len(jobs), 8):
-        batch = jobs[i:i + 8]
+    for j in jobs[AI_MAX_JOBS:]:
+        j["score"], j["reason"] = keyword_score(j), "keyword match"
+    jobs_ai = jobs[:AI_MAX_JOBS]
+    for i in range(0, len(jobs_ai), AI_BATCH):
+        batch = jobs_ai[i:i + AI_BATCH]
         done = False
         if key:
             items = [{"id": k, "title": j["title"], "company": j["company"], "location": j["location"],
-                      "text": (j.get("desc") or "")[:1500],
+                      "text": (j.get("desc") or "")[:400],
                       "note": "title only (from a job-alert email); judge on title" if j.get("from_email") else ""} for k, j in enumerate(batch)]
             prompt = (f"Candidate profile:\n{PROFILE}\n\nRate how well each job fits this candidate (0-100). "
                       "Penalise jobs that need skills the candidate lacks as core (e.g. AWS/GCP-only, Java/Scala-only, "
@@ -455,7 +472,9 @@ def ai_score(jobs):
                                       json={"model": model, "temperature": 0, "response_format": {"type": "json_object"},
                                             "messages": [{"role": "user", "content": prompt}]})
                     if r.status_code == 429:
-                        time.sleep(20)
+                        wait = min(float(r.headers.get("retry-after", 10) or 10), 30)
+                        print(f"  Groq busy, waiting {wait:.0f}s")
+                        time.sleep(wait)
                         continue
                     if r.status_code >= 400:
                         print(f"AI scoring with {model} failed: HTTP {r.status_code} {r.text[:200]}")
@@ -472,7 +491,7 @@ def ai_score(jobs):
                     break
                 except Exception as e:
                     print(f"AI scoring with {model} failed: {e}")
-            time.sleep(4)          # stay under Groq's free tokens-per-minute limit
+            time.sleep(1)
         if not done:
             for j in batch:
                 j.setdefault("score", keyword_score(j))
@@ -531,7 +550,7 @@ def send_email(jobs):
     if not (user and pwd) or not jobs:
         return
     rows = []
-    for j in jobs:
+    for j in jobs[:EMAIL_MAX_ROWS]:
         badge = "#1a7f37" if j["score"] >= 80 else "#9a6700" if j["score"] >= 70 else "#57606a"
         rows.append(f"""
 <tr><td style="padding:12px 14px;border-bottom:1px solid #e5e7eb">
@@ -546,14 +565,28 @@ def send_email(jobs):
     body = f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:680px;margin:auto">
 <h2 style="color:#2E3A4F;margin-bottom:4px">{len(jobs)} new Azure Data Engineer jobs</h2>
 <div style="color:#6b7280;font-size:13px;margin-bottom:12px">Jobs mentioning any of: {", ".join(KEYWORDS)}. Sorted by AI match score.</div>
+{f'<div style="font-size:13px;margin-bottom:10px">Showing the top {EMAIL_MAX_ROWS} by match score. <b>All {len(jobs)} jobs are in the attached CSV</b> (opens in Excel / Google Sheets).</div>' if len(jobs) > EMAIL_MAX_ROWS else ''}
 <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px">{''.join(rows)}</table>
 {f'<p style="font-size:13px"><a href="{dash}">Open your job dashboard</a></p>' if dash else ''}
 <p style="color:#9ca3af;font-size:11px">Sent by your AI Job Agent on GitHub Actions.</p></div>"""
-    msg = MIMEMultipart("alternative")
+    import csv, io
+    from email.mime.application import MIMEApplication
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = f"[Job Agent] {len(jobs)} new jobs - top: {jobs[0]['title']} @ {jobs[0]['company'] or 'n/a'}"
     msg["From"], msg["To"] = f"AI Job Agent <{user}>", to
-    msg.attach(MIMEText("\n\n".join(f"{j['title']} | {j['company']} | {fmt_exp(j)} | {fmt_sal(j)}\n{j['url']}" for j in jobs), "plain"))
-    msg.attach(MIMEText(body, "html"))
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText("\n\n".join(f"{j['title']} | {j['company']} | {fmt_exp(j)} | {fmt_sal(j)}\n{j['url']}" for j in jobs[:EMAIL_MAX_ROWS]), "plain"))
+    alt.attach(MIMEText(body, "html"))
+    msg.attach(alt)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Score", "Title", "Company", "Location", "Experience", "Salary", "Source", "Matched keyword", "Link"])
+    for j in jobs:
+        w.writerow([j["score"], j["title"], j["company"], j["location"], fmt_exp(j), fmt_sal(j), j["source"],
+                    j.get("search_kw", ""), j["url"]])
+    part = MIMEApplication(buf.getvalue().encode("utf-8-sig"), Name="jobs.csv")
+    part["Content-Disposition"] = f'attachment; filename="jobs_{datetime.now(IST):%Y-%m-%d_%H%M}.csv"'
+    msg.attach(part)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(user, pwd)
         s.sendmail(user, [a.strip() for a in to.split(",")], msg.as_string())
@@ -616,31 +649,39 @@ def main():
     if not use_jsearch:
         print("JSearch : skipped on this run (it runs on the morning run and on manual runs)")
     print("----------------------")
-    sources = [fetch_linkedin, fetch_naukri, fetch_hirist, fetch_jooble, fetch_adzuna]
-    per_source = {}
-    for n, q in enumerate(SEARCH_TERMS):
-        run = list(sources) + ([fetch_jsearch] if use_jsearch and n < JSEARCH_TERMS and fetch_jsearch not in blocked else [])
-        for fetch in run:
-            if fetch in blocked:
-                continue
-            name = fetch.__name__.replace("fetch_", "")
-            if fetch is fetch_jsearch:
-                time.sleep(2)
+    from concurrent.futures import ThreadPoolExecutor
+    t0 = time.time()
+
+    def run_source(fetch, terms):
+        """One site, all search terms, one after another (polite to that site). Sites run in parallel."""
+        name, got_all = fetch.__name__.replace("fetch_", ""), []
+        for q in terms:
             try:
                 got = fetch(q)
                 print(f"{name:8} '{q}': {len(got)} jobs")
-                per_source[name] = per_source.get(name, 0) + len(got)
-                found += got
+                got_all += got
             except requests.HTTPError as e:
                 code = e.response.status_code
                 print(f"{name:8} '{q}' FAILED: HTTP {code} {e.response.text[:150]}")
-                if code in (401, 403, 406, 999):   # blocked / not allowed: skip this source for the rest of the run
+                if code in (401, 403, 406, 429, 999):
                     print(f"  -> {name} is blocking or rejecting requests; skipping it for this run")
-                    blocked.add(fetch)
+                    break
             except Exception as e:
-                print(f"{name:8} '{q}' FAILED: {e}")
-                if "no JSearch search path" in str(e):
-                    blocked.add(fetch)
+                print(f"{name:8} '{q}' FAILED: {str(e)[:150]}")
+                if "no JSearch search path" in str(e) or "timed out" in str(e).lower():
+                    print(f"  -> {name} is not responding; skipping it for this run")
+                    break
+        return name, got_all
+
+    jobs_plan = [(f, SEARCH_TERMS) for f in [fetch_linkedin, fetch_naukri, fetch_hirist, fetch_jooble, fetch_adzuna]]
+    if use_jsearch:
+        jobs_plan.append((fetch_jsearch, SEARCH_TERMS[:JSEARCH_TERMS]))
+    per_source = {}
+    with ThreadPoolExecutor(max_workers=len(jobs_plan)) as pool:
+        for name, got in pool.map(lambda p: run_source(*p), jobs_plan):
+            per_source[name] = len(got)
+            found += got
+    print(f"Searching took {time.time() - t0:.0f}s")
     print("Jobs per source:", ", ".join(f"{k} {v}" for k, v in per_source.items()) or "none")
     try:
         got = fetch_gmail_alerts()
