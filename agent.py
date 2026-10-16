@@ -3,7 +3,8 @@ AI Job Agent - finds Azure Data Engineer jobs, scores them with AI, and sends th
 to Gmail and WhatsApp. Runs free on GitHub Actions.
 
 Sources
-  - Adzuna API           (free key)           every run
+  - Adzuna API           (optional; now asks for a card)
+  - Jooble API           (free key by email)  every run
   - JSearch via RapidAPI (free key)           once a day  -> LinkedIn, Indeed, Glassdoor,
                                                                Naukri & company sites via Google for Jobs
   - Your Gmail inbox     (job-alert emails)   every run   -> LinkedIn, Naukri, Indeed, foundit,
@@ -28,26 +29,23 @@ import requests
 from bs4 import BeautifulSoup
 
 # ======================= YOUR SEARCH SETTINGS ===========================
-QUERIES = ["Azure Data Engineer", "Azure Databricks Data Engineer", "PySpark Data Engineer"]
+QUERIES = ["Azure Data Engineer", "PySpark Data Engineer", "Databricks Data Engineer",
+           "ADF Data Engineer", "Python Data Engineer Azure"]
 COUNTRY = "in"                      # India
-EXP_MIN, EXP_MAX = 5, 10            # years of experience you want
-MIN_SALARY_LPA = 18                 # 18 LPA+
-KEEP_UNKNOWN_SALARY = True          # most Indian posts hide salary; keep them but mark "not disclosed"
-MIN_AI_SCORE = 60                   # jobs scoring below this are dropped
-MAX_WHATSAPP = 8                    # top N jobs per WhatsApp run (rest are in the email)
+
+# A job is sent if its title or description contains ANY ONE of these keywords.
+# Nothing else is checked (no experience, salary, title or AI-score filter).
+KEYWORDS = ["pyspark", "databricks", "adf", "azure data factory", "adls", "python", "synapse" , "azure data factory" , "fabric" , "azure sql","data lake","delta" ]
+
+MAX_WHATSAPP = 8                    # only used if WhatsApp/Telegram secrets are added
+EXP_MIN, EXP_MAX, MIN_SALARY_LPA = 5, 10, 18   # shown in the email text only, not used as filters
 
 PROFILE = """Azure Data Engineer, 8 years IT experience (4+ years data engineering).
 Skills: Azure Data Factory (ADF), ADLS Gen2, Azure Synapse Analytics, Azure Databricks, PySpark,
 Python, SQL, T-SQL, SQL Server, Delta Lake, Medallion architecture, incremental loads, data migration,
 Azure DevOps CI/CD, Key Vault, Unity Catalog, Power BI.
-Wants: Data Engineer / Senior Data Engineer / Azure Data Engineer roles in India (Bengaluru preferred,
-remote/hybrid fine), 5-10 years experience band, 18 LPA or more."""
-
-ROLE_WORDS = ["data engineer", "data engineering", "databricks", "pyspark", "big data", "etl developer",
-              "data platform", "azure data", "lakehouse"]
-TECH_WORDS = ["azure", "adf", "data factory", "adls", "synapse", "databricks", "pyspark", "spark", "fabric", "python"]
-EXCLUDE_TITLE = ["intern", "trainee", "fresher", "junior", "jr.", "graduate", "teacher", "trainer",
-                 "sales", "recruiter", "principal architect", "director", "vp "]
+Wants: Data Engineer / Senior Data Engineer / Azure Data Engineer roles in India, 5-10 years, 18 LPA+."""
+# The AI score is only used to SORT jobs (best first). It never removes a job.
 KEEP_DAYS = 30
 # ========================================================================
 
@@ -101,30 +99,12 @@ def parse_salary_lpa(text):
     return None, None
 
 
-def title_ok(title):
-    t = title.lower()
-    return not any(w in t for w in EXCLUDE_TITLE) and any(w in t for w in ROLE_WORDS)
+KW_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in KEYWORDS) + r")\b", re.I)
 
 
 def rule_filter(j):
-    """Hard filters. Unknown experience/salary is kept; stated values outside your band are dropped."""
-    if not title_ok(j["title"]):
-        return False
-    text = f"{j['title']} {j.get('desc', '')}".lower()
-    if j.get("desc") and not j.get("from_email") and not any(w in text for w in TECH_WORDS):
-        return False
-    lo, hi = j.get("exp_min"), j.get("exp_max")
-    if lo is not None and lo > EXP_MAX:
-        return False
-    if hi is not None and hi < EXP_MIN:
-        return False
-    smin, smax = j.get("sal_min"), j.get("sal_max")
-    top = smax or smin
-    if top is not None and top < MIN_SALARY_LPA:
-        return False
-    if top is None and not KEEP_UNKNOWN_SALARY:
-        return False
-    return True
+    """Only rule: the job mentions at least one keyword (whole word, any case)."""
+    return bool(KW_RE.search(f"{j.get('title', '')} {j.get('desc', '')}"))
 
 
 def enrich(j):
@@ -156,6 +136,27 @@ def fetch_adzuna(query):
             # Adzuna's predicted salaries are guesses, so only trust real ones
             "sal_min": round(smin / 1e5, 1) if smin and not estimated else None,
             "sal_max": round(smax / 1e5, 1) if smax and not estimated else None,
+        })
+    return out
+
+
+def fetch_jooble(query):
+    """Jooble: free key by email (jooble.org/api/about), no card. Aggregates Indian job boards."""
+    key = env("JOOBLE_API_KEY")
+    if not key:
+        return []
+    r = requests.post(f"https://jooble.org/api/{key}", timeout=30,
+                      json={"keywords": query, "location": "India", "page": "1"})
+    r.raise_for_status()
+    out = []
+    for x in r.json().get("jobs", []) or []:
+        out.append({
+            "title": clean(BeautifulSoup(x.get("title", ""), "html.parser").get_text()),
+            "company": clean(x.get("company")), "location": clean(x.get("location")) or "India",
+            "url": x.get("link", ""), "source": f"Jooble ({clean(x.get('source')) or 'web'})",
+            "posted": x.get("updated", ""),
+            "desc": clean(BeautifulSoup(x.get("snippet", ""), "html.parser").get_text()),
+            "salary_text": clean(x.get("salary")),
         })
     return out
 
@@ -341,7 +342,7 @@ def send_email(jobs):
     dash = env("DASHBOARD_URL")
     body = f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:680px;margin:auto">
 <h2 style="color:#2E3A4F;margin-bottom:4px">{len(jobs)} new Azure Data Engineer jobs</h2>
-<div style="color:#6b7280;font-size:13px;margin-bottom:12px">Filtered for {EXP_MIN}-{EXP_MAX} years, {MIN_SALARY_LPA} LPA+ (or salary not disclosed), sorted by AI match score.</div>
+<div style="color:#6b7280;font-size:13px;margin-bottom:12px">Jobs mentioning any of: {", ".join(KEYWORDS)}. Sorted by AI match score.</div>
 <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px">{''.join(rows)}</table>
 {f'<p style="font-size:13px"><a href="{dash}">Open your job dashboard</a></p>' if dash else ''}
 <p style="color:#9ca3af;font-size:11px">Sent by your AI Job Agent on GitHub Actions.</p></div>"""
@@ -404,7 +405,7 @@ def main():
 
     found = []
     for q in QUERIES:
-        for fetch in [fetch_adzuna] + ([fetch_jsearch] if use_jsearch else []):
+        for fetch in [fetch_adzuna, fetch_jooble] + ([fetch_jsearch] if use_jsearch else []):
             try:
                 found += fetch(q)
             except Exception as e:
@@ -427,9 +428,9 @@ def main():
             candidates.append(j)
     print(f"New after filters: {len(candidates)}")
 
-    scored = [j for j in ai_score(candidates) if rule_filter(j) and j["score"] >= MIN_AI_SCORE]
+    scored = ai_score(candidates)          # score is used for sorting only
     scored.sort(key=lambda j: j["score"], reverse=True)
-    print(f"Matches (score >= {MIN_AI_SCORE}): {len(scored)}")
+    print(f"Matches (any keyword): {len(scored)}")
 
     now = datetime.now(IST).isoformat(timespec="minutes")
     for j in scored:
