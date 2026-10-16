@@ -415,13 +415,19 @@ def main():
     print("----------------------")
     sources = [fetch_adzuna, fetch_jooble] + ([fetch_jsearch] if use_jsearch else [])
     for q in QUERIES:
-        for fetch in sources:
+        for fetch in list(sources):
+            if fetch is fetch_jsearch:
+                time.sleep(2)          # JSearch free plan allows only about 1 request per second
             try:
                 got = fetch(q)
                 print(f"{fetch.__name__.replace('fetch_', ''):8} '{q}': {len(got)} jobs")
                 found += got
             except requests.HTTPError as e:
-                print(f"{fetch.__name__} '{q}' FAILED: HTTP {e.response.status_code} {e.response.text[:200]}")
+                code = e.response.status_code
+                print(f"{fetch.__name__} '{q}' FAILED: HTTP {code} {e.response.text[:200]}")
+                if code in (401, 403):     # bad key / not subscribed: no point trying the other queries
+                    print(f"  -> stopping {fetch.__name__} for this run (check the key / subscription)")
+                    sources.remove(fetch)
             except Exception as e:
                 print(f"{fetch.__name__} '{q}' FAILED: {e}")
     try:
@@ -430,6 +436,9 @@ def main():
         found += got
     except Exception as e:
         print("Gmail alert reading FAILED:", e)
+        if "Application-specific password" in str(e) or "Invalid credentials" in str(e):
+            print("  -> GMAIL_APP_PASSWORD must be a 16-letter App Password from myaccount.google.com/apppasswords,"
+                  " not your normal Gmail password")
     print(f"Fetched {len(found)} jobs")
 
     candidates, ids = [], set()
