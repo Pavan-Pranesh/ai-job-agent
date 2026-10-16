@@ -29,8 +29,9 @@ import requests
 from bs4 import BeautifulSoup
 
 # ======================= YOUR SEARCH SETTINGS ===========================
-QUERIES = ["Azure Data Engineer", "PySpark Data Engineer", "Databricks Data Engineer",
-           "ADF Data Engineer", "Python Data Engineer Azure"]
+# Every source searches each of these terms (full job text is searched by the site itself).
+SEARCH_TERMS = ["PySpark", "Databricks", "Azure Data Factory", "ADF", "ADLS", "Synapse", "Python"]
+QUERIES = SEARCH_TERMS
 COUNTRY = "in"                      # India
 
 # A job is sent if its title or description contains ANY ONE of these keywords.
@@ -46,6 +47,9 @@ Python, SQL, T-SQL, SQL Server, Delta Lake, Medallion architecture, incremental 
 Azure DevOps CI/CD, Key Vault, Unity Catalog, Power BI.
 Wants: Data Engineer / Senior Data Engineer / Azure Data Engineer roles in India, 5-10 years, 18 LPA+."""
 # The AI score is only used to SORT jobs (best first). It never removes a job.
+LINKEDIN_PAGES = 4                  # 25 jobs per page, posted in the last 24 hours
+NAUKRI_PAGES = 2                    # 20 jobs per page, posted in the last day
+JSEARCH_TERMS = 4                   # JSearch free quota is small: only the first N search terms, morning run only
 JOOBLE_PAGES = 3                    # pages of Jooble results per search (about 20 jobs per page)
 ALERT_DAYS = 3                      # how many days back to read job-alert emails
 KEEP_DAYS = 30
@@ -64,8 +68,10 @@ def clean(t):
 
 
 def job_id(title, company, url=""):
-    m = re.search(r"(?:jobs/view/|jk=|jobid=|-)(\d{6,})", url or "")
-    key = m.group(1) if m else re.sub(r"[^a-z0-9]", "", f"{title}{company}".lower())
+    """Same job = same posting id in its link (or same link). Different postings are never merged by title."""
+    u = (url or "").split("?")[0].rstrip("/")
+    m = re.search(r"(?:jobs/view/|jk=|jobid=|/j/|-)(\d{6,})$", u) or re.search(r"(?:jobs/view/|jk=|jobid=)(\d{6,})", url or "")
+    key = (urlsplit(u).netloc + ":" + m.group(1)) if m else (u or re.sub(r"[^a-z0-9]", "", f"{title}{company}".lower()))
     return hashlib.sha1(key.encode()).hexdigest()[:16]
 
 
@@ -107,11 +113,13 @@ KW_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in KEYWORDS) + r")\b", r
 def rule_filter(j):
     """Only rule: the job's title or details contain at least one keyword (whole word, any case).
     No role, title, experience, salary or score check."""
+    if j.get("search_kw"):          # the job site itself matched your keyword in the full job text
+        return True
     return bool(KW_RE.search(f"{j.get('title', '')} {j.get('desc', '')}"))
 
 
 def enrich(j):
-    text = f"{j['title']} {j.get('desc', '')} {j.get('salary_text', '')}"
+    text = f"{j.get('exp_text', '')} {j['title']} {j.get('desc', '')} {j.get('salary_text', '')}"
     if j.get("exp_min") is None:
         j["exp_min"], j["exp_max"] = parse_experience(text)
     if j.get("sal_min") is None:
@@ -165,7 +173,7 @@ def fetch_jooble(query):
             "url": x.get("link", ""), "source": f"Jooble ({clean(x.get('source')) or 'web'})",
             "posted": x.get("updated", ""),
             "desc": clean(BeautifulSoup(x.get("snippet", ""), "html.parser").get_text()),
-            "salary_text": clean(x.get("salary")),
+            "salary_text": clean(x.get("salary")), "search_kw": query,
         })
     return out
 
@@ -211,6 +219,133 @@ def fetch_jsearch(query):
             "sal_min": round(smin * mult / 1e5, 1) if (smin and mult) else None,
             "sal_max": round(smax * mult / 1e5, 1) if (smax and mult) else None,
         })
+    return out
+
+
+BROWSER = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/129.0 Safari/537.36", "Accept-Language": "en-IN,en;q=0.9"}
+
+
+def _pause(a=3, b=6):
+    import random
+    time.sleep(random.uniform(a, b))
+
+
+def fetch_linkedin(term):
+    """LinkedIn public (no login) job search, India, posted in the last 24 hours."""
+    out = []
+    for start in range(0, LINKEDIN_PAGES * 25, 25):
+        r = requests.get("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search", timeout=30,
+                         headers=BROWSER, params={"keywords": term, "location": "India", "f_TPR": "r86400",
+                                                  "start": start})
+        if r.status_code == 429:
+            print(f"  LinkedIn is rate-limiting (429) after {len(out)} jobs for '{term}'")
+            break
+        r.raise_for_status()
+        cards = BeautifulSoup(r.text, "html.parser").select("li")
+        got = 0
+        for c in cards:
+            t = c.select_one("h3.base-search-card__title")
+            link = c.select_one("a.base-card__full-link") or c.select_one("a[href*='/jobs/view/']")
+            if not t or not link:
+                continue
+            comp = c.select_one("h4.base-search-card__subtitle")
+            loc = c.select_one("span.job-search-card__location")
+            when = c.select_one("time")
+            out.append({"title": clean(t.get_text()), "company": clean(comp.get_text()) if comp else "",
+                        "location": clean(loc.get_text()) if loc else "India",
+                        "url": link["href"].split("?")[0], "source": "LinkedIn",
+                        "posted": when.get("datetime", "") if when else "", "desc": "", "search_kw": term})
+            got += 1
+        if got < 10:
+            break
+        _pause()
+    return out
+
+
+def fetch_naukri(term):
+    """Naukri search (the same JSON their website uses), posted in the last day."""
+    slug = re.sub(r"[^a-z0-9]+", "-", term.lower()).strip("-")
+    headers = dict(BROWSER, **{"appid": "109", "systemid": "Naukri", "clientid": "d3skt0p",
+                               "Accept": "application/json", "Referer": f"https://www.naukri.com/{slug}-jobs"})
+    out = []
+    for page in range(1, NAUKRI_PAGES + 1):
+        r = requests.get("https://www.naukri.com/jobapi/v3/search", timeout=30, headers=headers, params={
+            "noOfResults": 20, "urlType": "search_by_keyword", "searchType": "adv", "keyword": term,
+            "pageNo": page, "k": term, "seoKey": f"{slug}-jobs", "src": "jobsearchDesk", "latLong": "", "jobAge": 1})
+        r.raise_for_status()
+        jobs = r.json().get("jobDetails") or []
+        for x in jobs:
+            ph = {p.get("type"): p.get("label", "") for p in x.get("placeholders", []) or []}
+            url = x.get("jdURL") or ""
+            out.append({"title": clean(x.get("title")), "company": clean(x.get("companyName")),
+                        "location": clean(ph.get("location")), "source": "Naukri",
+                        "url": url if url.startswith("http") else f"https://www.naukri.com{url}",
+                        "posted": x.get("footerPlaceholderLabel", ""),
+                        "desc": clean(BeautifulSoup(x.get("jobDescription", "") or "", "html.parser").get_text())
+                                + " " + clean(x.get("tagsAndSkills")),
+                        "salary_text": ph.get("salary", ""), "exp_text": ph.get("experience", ""),
+                        "search_kw": term})
+        if len(jobs) < 20:
+            break
+        _pause(2, 4)
+    return out
+
+
+def _walk_jobs(obj, found):
+    """Find job-like records inside a page's embedded JSON."""
+    if isinstance(obj, dict):
+        title = obj.get("title") or obj.get("designation") or obj.get("jobTitle")
+        jid = obj.get("id") or obj.get("jobId")
+        cd = obj.get("companyData") if isinstance(obj.get("companyData"), dict) else {}
+        comp = obj.get("companyName") or cd.get("companyName")
+        if isinstance(title, str) and jid and (comp or obj.get("jobDetailUrl") or obj.get("min") is not None):
+            found.append(obj)
+        for v in obj.values():
+            _walk_jobs(v, found)
+    elif isinstance(obj, list):
+        for v in obj:
+            _walk_jobs(v, found)
+
+
+def fetch_hirist(term):
+    """Hirist public search page (tech jobs, India)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", term.lower()).strip("-")
+    r = requests.get(f"https://www.hirist.tech/search/{slug}-jobs", timeout=30, headers=BROWSER,
+                     params={"minexp": 3, "maxexp": 15})
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+    out, seen = [], set()
+    # 1) embedded JSON (Next.js style pages)
+    for sc in soup.find_all("script"):
+        txt = sc.string or ""
+        if sc.get("id") == "__NEXT_DATA__" or (txt.strip().startswith("{") and '"title"' in txt):
+            try:
+                recs = []
+                _walk_jobs(json.loads(txt), recs)
+            except Exception:
+                continue
+            for x in recs:
+                url = x.get("jobDetailUrl") or f"https://www.hirist.tech/j/{x.get('id')}"
+                if url in seen:
+                    continue
+                seen.add(url)
+                cd = x.get("companyData") if isinstance(x.get("companyData"), dict) else {}
+                out.append({"title": clean(x.get("title") or x.get("designation")),
+                            "company": clean(x.get("companyName") or cd.get("companyName")),
+                            "location": clean(", ".join(l.get("name", "") for l in x.get("locations", []) if isinstance(l, dict))),
+                            "url": url, "source": "Hirist", "posted": "", "desc": clean(str(x.get("tags", ""))),
+                            "search_kw": term})
+    # 2) plain links like /j/company-role-123456
+    for a in soup.find_all("a", href=True):
+        if re.search(r"/j/[\w-]+-\d{4,}", a["href"]):
+            url = a["href"] if a["href"].startswith("http") else "https://www.hirist.tech" + a["href"]
+            if url in seen:
+                continue
+            seen.add(url)
+            text = clean(a.get_text(" ")) or re.sub(r"-\d+$", "", url.rsplit("/", 1)[-1]).replace("-", " ").title()
+            out.append({"title": text[:120], "company": "", "location": "", "url": url, "source": "Hirist",
+                        "posted": "", "desc": "", "search_kw": term})
     return out
 
 
@@ -299,7 +434,7 @@ def fetch_gmail_alerts():
 def ai_score(jobs):
     """Score jobs with Groq (free). Falls back to a keyword score if no key or on error."""
     key = env("GROQ_API_KEY")
-    models = [env("GROQ_MODEL", "llama-3.3-70b-versatile"), "llama-3.1-8b-instant"]
+    models = groq_models(key) if key else []
     for i in range(0, len(jobs), 8):
         batch = jobs[i:i + 8]
         done = False
@@ -322,7 +457,9 @@ def ai_score(jobs):
                     if r.status_code == 429:
                         time.sleep(20)
                         continue
-                    r.raise_for_status()
+                    if r.status_code >= 400:
+                        print(f"AI scoring with {model} failed: HTTP {r.status_code} {r.text[:200]}")
+                        continue
                     res = json.loads(r.json()["choices"][0]["message"]["content"]).get("jobs", [])
                     for x in res:
                         j = batch[int(x["id"])]
@@ -335,12 +472,31 @@ def ai_score(jobs):
                     break
                 except Exception as e:
                     print(f"AI scoring with {model} failed: {e}")
-            time.sleep(2)
+            time.sleep(4)          # stay under Groq's free tokens-per-minute limit
         if not done:
             for j in batch:
                 j.setdefault("score", keyword_score(j))
                 j.setdefault("reason", "keyword match")
     return jobs
+
+
+def groq_models(key):
+    """Ask Groq which chat models exist right now (model names change over time) and pick good ones."""
+    wanted = [env("GROQ_MODEL")] if env("GROQ_MODEL") else []
+    try:
+        r = requests.get("https://api.groq.com/openai/v1/models", timeout=30, headers={"Authorization": f"Bearer {key}"})
+        r.raise_for_status()
+        ids = [m["id"] for m in r.json().get("data", []) if m.get("active", True)]
+    except Exception as e:
+        print(f"Could not list Groq models: {e}")
+        return wanted or ["llama-3.3-70b-versatile"]
+    skip = ("whisper", "tts", "guard", "embed", "vision", "audio", "playai", "compound", "orpheus")
+    chat = [i for i in ids if not any(w in i.lower() for w in skip)]
+    prefer = ["gpt-oss-120b", "llama-4", "llama-3.3-70b", "qwen", "gpt-oss-20b", "llama"]
+    ranked = sorted(chat, key=lambda i: next((n for n, p in enumerate(prefer) if p in i.lower()), 99))
+    picked = (wanted + ranked)[:2]
+    print(f"Groq models available: {len(chat)}; using {picked}")
+    return picked
 
 
 def keyword_score(j):
@@ -450,7 +606,7 @@ def main():
         store = {"updated": "", "jobs": []}
     seen = {j["id"] for j in store["jobs"]} | set(store.get("seen_ids", []))
 
-    found = []
+    found, blocked = [], set()
     print("---- Source check ----")
     for name, keys in [("Adzuna", ["ADZUNA_APP_ID", "ADZUNA_APP_KEY"]), ("Jooble", ["JOOBLE_API_KEY"]),
                        ("JSearch", ["RAPIDAPI_KEY"]), ("Gmail", ["GMAIL_USER", "GMAIL_APP_PASSWORD"]),
@@ -460,23 +616,32 @@ def main():
     if not use_jsearch:
         print("JSearch : skipped on this run (it runs on the morning run and on manual runs)")
     print("----------------------")
-    sources = [fetch_adzuna, fetch_jooble] + ([fetch_jsearch] if use_jsearch else [])
-    for q in QUERIES:
-        for fetch in list(sources):
+    sources = [fetch_linkedin, fetch_naukri, fetch_hirist, fetch_jooble, fetch_adzuna]
+    per_source = {}
+    for n, q in enumerate(SEARCH_TERMS):
+        run = list(sources) + ([fetch_jsearch] if use_jsearch and n < JSEARCH_TERMS and fetch_jsearch not in blocked else [])
+        for fetch in run:
+            if fetch in blocked:
+                continue
+            name = fetch.__name__.replace("fetch_", "")
             if fetch is fetch_jsearch:
-                time.sleep(2)          # JSearch free plan allows only about 1 request per second
+                time.sleep(2)
             try:
                 got = fetch(q)
-                print(f"{fetch.__name__.replace('fetch_', ''):8} '{q}': {len(got)} jobs")
+                print(f"{name:8} '{q}': {len(got)} jobs")
+                per_source[name] = per_source.get(name, 0) + len(got)
                 found += got
             except requests.HTTPError as e:
                 code = e.response.status_code
-                print(f"{fetch.__name__} '{q}' FAILED: HTTP {code} {e.response.text[:200]}")
-                if code in (401, 403):     # bad key / not subscribed: no point trying the other queries
-                    print(f"  -> stopping {fetch.__name__} for this run (check the key / subscription)")
-                    sources.remove(fetch)
+                print(f"{name:8} '{q}' FAILED: HTTP {code} {e.response.text[:150]}")
+                if code in (401, 403, 406, 999):   # blocked / not allowed: skip this source for the rest of the run
+                    print(f"  -> {name} is blocking or rejecting requests; skipping it for this run")
+                    blocked.add(fetch)
             except Exception as e:
-                print(f"{fetch.__name__} '{q}' FAILED: {e}")
+                print(f"{name:8} '{q}' FAILED: {e}")
+                if "no JSearch search path" in str(e):
+                    blocked.add(fetch)
+    print("Jobs per source:", ", ".join(f"{k} {v}" for k, v in per_source.items()) or "none")
     try:
         got = fetch_gmail_alerts()
         print(f"gmail alert emails: {len(got)} jobs")
@@ -489,15 +654,24 @@ def main():
     print(f"Fetched {len(found)} jobs")
 
     candidates, ids = [], set()
+    dup, old, nokw = 0, 0, 0
     for j in found:
         if not j.get("title") or not j.get("url"):
             continue
         j["id"] = job_id(j["title"], j["company"], j["url"])
-        if j["id"] in seen or j["id"] in ids:
+        if j["id"] in ids:
+            dup += 1
             continue
         ids.add(j["id"])
+        if j["id"] in seen:
+            old += 1
+            continue
         if rule_filter(enrich(j)):
             candidates.append(j)
+        else:
+            nokw += 1
+    print(f"Breakdown: {len(found)} fetched -> {dup} duplicates across searches, {old} already sent earlier, "
+          f"{nokw} without any keyword -> {len(candidates)} new matches")
     print(f"New after filters: {len(candidates)}")
 
     scored = ai_score(candidates)          # score is used for sorting only
