@@ -3,7 +3,7 @@ name: AI Job Agent
 on:
   schedule:
     # Times are UTC. IST = UTC + 5:30  ->  8:15, 12:15, 16:15, 20:15 IST
-    - cron: "45 11 * * *"       # 6:00 PM IST
+    - cron: "51 11 * * *"       # 6:00 PM IST
     - cron: "30 14 * * *"       # 6:00 PM IST
   workflow_dispatch:            # "Run workflow" button in the Actions tab
 
